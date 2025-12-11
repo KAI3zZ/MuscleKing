@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any
 import uuid
 from sqlalchemy.orm import Session
 from muscleking.app.models.model_chat import SessionInfo
+from muscleking.app.agents.lg_builder import graph
 from loguru import logger
 
 
