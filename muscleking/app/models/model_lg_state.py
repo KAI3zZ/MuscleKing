@@ -1,22 +1,32 @@
+"""
+agents 相关的数据模型
+"""
 from pydantic import BaseModel, Field
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Dict, List, Literal, Optional
 from langchain_core.messages import AnyMessage
 from langgraph.graph import add_messages
 
+class AdditionalGuardrailsOutput(BaseModel):
+    """
+    格式化输出"end" 或 "proceed"，用于判断用户的问题是否与图谱内容相关
+    """
+    decision: Literal["end", "proceed"] = Field(
+        description="Decision on whether the question is related to the graph contents."
+    )
 
 class Router(BaseModel):
-    """Classify user query (同时兼容旧字段/属性访问)."""
-
+    """路由类型数据模型，用于分类解决用户问题的路径"""
+    # logic是不同路由类型的判断逻辑
     logic: str = ""
     type: Literal[
         "general-query",
         "additional-query",
         "kb-query",
-        "graphrag-query",
-        "image-query",
-        "file-query",
-        "text2sql-query",
+        "lightrag-query",
+        # "image-query",
+        # "file-query",
+        # "text2sql-query",
     ] = "kb-query"
     question: str = ""
     decision: Optional[str] = None
@@ -24,13 +34,16 @@ class Router(BaseModel):
     reasoning: Optional[str] = None
 
     class Config:
-        extra = "allow"
+        extra = "allow" # 允许额外的字段
+
+    def __getattr__(self, key: str) -> Any:
+        """字典风格访问兼容旧逻辑。"""
+        return getattr(self, key)
 
     def get(self, key: str, default: Any = None) -> Any:
         """字典风格访问兼容旧逻辑。"""
         return getattr(self, key, self.__dict__.get(key, default))
-
-
+    
 @dataclass(kw_only=True)
 class RouteResult:
     """Route selection result for downstream nodes."""

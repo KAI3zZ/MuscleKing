@@ -5,9 +5,9 @@ from langchain_core.messages import BaseMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from loguru import logger
-from muscleking.app.models.model_agents import AdditionalGuardrailsOutput
+from muscleking.app.models.model_lg_state import AdditionalGuardrailsOutput
 from dataclasses import dataclass, field
-from muscleking.app.agents.lg_states import AgentState, InputState, Router, GradeHallucinations
+from muscleking.app.models.model_lg_state import AgentState, InputState, Router, GradeHallucinations
 from muscleking.app.agents.lg_prompts import (ROUTER_SYSTEM_PROMPT,GENERAL_QUERY_SYSTEM_PROMPT)
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
@@ -15,15 +15,7 @@ from muscleking.config import settings
 from typing import cast, Literal, List, Dict, Any, Optional
 
 
-
-
-
-
-
-
-
 logger = logger.bind(service="lg_builder")
-
 
 
 #意图识别
