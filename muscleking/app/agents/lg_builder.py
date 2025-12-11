@@ -18,21 +18,18 @@ from typing import cast, Literal, List, Dict, Any, Optional
 logger = logger.bind(service="lg_builder")
 
 
-#意图识别
+# 意图识别
 async def analyze_and_route_query(
         state: AgentState, *, config: RunnableConfig
 ) -> dict[str, Router]:
-    """Analyze the user's query and determine the appropriate routing.
-
-    This function uses a language model to classify the user's query and decide how to route it
-    within the conversation flow.
+    """用llm分析用户query并选择适当的路由。
 
     Args:
-        state (AgentState): The current state of the agent, including conversation history.
-        config (RunnableConfig): Configuration with the model used for query analysis.
+        state (AgentState): Agent当前的状态信息,包含历史对话等信息.
+        config (RunnableConfig): 帮助模型进行query分析的配置.
 
     Returns:
-        dict[str, Router]: A dictionary containing the 'router' key with the classification result (classification type and logic).
+        dict[str, Router]: 包含路由信息的字典,key为"router", value为Router对象.
     """
 
     if not settings.OPENAI_API_KEY:
@@ -47,14 +44,16 @@ async def analyze_and_route_query(
     )
 
     # 拼接提示模版 + 用户的实时问题（包含历史上下文对话）
-    messages = [
+    prompt = [
                    {"role": "system", "content": ROUTER_SYSTEM_PROMPT}
                ] + state.messages
-    logger.info("-----Analyze user query type-----")
-    logger.info(f"History messages: {state.messages}")
-
+    logger.info("-----分析用户的query类型-----")
+    logger.info(f"历史消息记录（包含用户query）: {state.messages}")
+    # 提取用户的query
     question_text = state.messages[-1].content if state.messages else ""
+    # 启发式路由（仅关键词识别）
     heuristic_router = _heuristic_router(question_text)
+    # 当llm路由失败时，设定启发式路由作为后备选项，默认路由（知识库查询）兜底
     fallback_router: Router = heuristic_router or Router(
         type="kb-query",
         logic="fallback: default to knowledge base routing",
@@ -65,40 +64,29 @@ async def analyze_and_route_query(
         "general-query",
         "additional-query",
         "kb-query",
-        "graphrag-query",
-        "image-query",
-        "file-query",
-        "text2sql-query",
+        "lightrag-query",
+        # "image-query",
+        # "file-query",
+        # "text2sql-query",
     }
 
     try:
-        raw_response = await model.with_structured_output(Router).ainvoke(messages)
+        raw_response = await model.with_structured_output(Router).ainvoke(prompt)
     except Exception as exc:
-        logger.warning("Router LLM failed: %s. Falling back to KB query.", exc)
+        logger.warning("llm路由失败: %s. 使用fallback_router.", exc)
         return {"router": fallback_router}
-
+    # 规范化输出,保证字段访问兼容response是Router类型
     response = raw_response if isinstance(raw_response, Router) else Router.model_validate(raw_response)
     router_type = response.type
     logic = response.logic or ""
-
+    # 路由类型无效时的处理
     if not router_type or router_type not in allowed_types:
         logger.warning(
-            "Router returned invalid type `%s`; applying heuristic fallback.", router_type
+            "llm路由返回无效的类型: `%s`; 使用启发式路由回退方案.", router_type
         )
-        heuristic_router = _heuristic_router(question_text)
-        if heuristic_router:
-            sanitized = heuristic_router
-            if not sanitized.logic:
-                sanitized.logic = logic or ""
-            return {"router": sanitized}
-        return {
-            "router": Router(
-                type="kb-query",
-                logic=logic or "fallback: invalid router output",
-                question=question_text,
-            )
-        }
-
+        fallback_router.logic = logic or ""
+        return {"router": fallback_router}
+    # llm路由成功，返回规范化的Router对象
     sanitized_router = Router(
         type=router_type,
         logic=logic,
@@ -108,8 +96,7 @@ async def analyze_and_route_query(
         reasoning=response.reasoning,
     )
 
-    # Heuristic router is only used when the LLM output is invalid (handled above).
-    logger.info(f"Analyze user query type completed, result: {sanitized_router}")
+    logger.info(f"分析用户query并选择适当的路由完成: {sanitized_router}")
     return {"router": sanitized_router}
 
 
@@ -123,8 +110,8 @@ def _heuristic_router(question: str) -> Optional[Router]:
 
     lowered = question.lower()
 
-    # === GraphRAG 关键词：动作要点 / 训练步骤 / 计划分解 ===
-    graphrag_keywords = [
+    # === lightrag 关键词：动作要点 / 训练步骤 / 计划分解 ===
+    lightrag_keywords = [
         "怎么练",
         "如何练",
         "怎么做",
@@ -192,11 +179,11 @@ def _heuristic_router(question: str) -> Optional[Router]:
             question=question,
         )
 
-    # --- 匹配 graphrag ---
-    if any(keyword in lowered for keyword in graphrag_keywords):
+    # --- 匹配 lightrag ---
+    if any(keyword in lowered for keyword in lightrag_keywords):
         return Router(
-            type="graphrag-query",
-            logic="keyword fallback: graphrag",
+            type="lightrag-query",
+            logic="keyword fallback: lightrag",
             question=question,
         )
 
@@ -251,7 +238,7 @@ def route_query(
         return "respond_to_general_query"
     elif _type == "additional-query":
         return "get_additional_info"
-    elif _type in ("graphrag-query", "text2sql-query"):  # 图查询或结构化问数
+    elif _type in ("lightrag-query", "text2sql-query"):  # 图查询或结构化问数
         return "create_research_plan"
     elif _type == "image-query":
         return "create_image_query"
@@ -439,7 +426,7 @@ builder = StateGraph(AgentState, input=InputState)
 builder.add_node(analyze_and_route_query) # 意图识别
 builder.add_node(respond_to_general_query)#默认回复
 # builder.add_node(get_additional_info) # 图结构信息
-# builder.add_node("create_research_plan", create_research_plan)  # 这里是graphrag neo4j-query
+# builder.add_node("create_research_plan", create_research_plan)  # 这里是lightrag neo4j-query
 # builder.add_node(create_image_query)
 # builder.add_node(create_file_query)
 # builder.add_node(create_kb_query)
