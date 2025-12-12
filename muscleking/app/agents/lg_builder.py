@@ -13,7 +13,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from muscleking.config import settings
 from typing import cast, Literal, List, Dict, Any, Optional
-
+from langgraph.checkpoint.memory import MemorySaver
 
 logger = logger.bind(service="lg_builder")
 
@@ -137,8 +137,7 @@ def _heuristic_router(question: str) -> Optional[Router]:
     return None
 
 
-
-#根据意图识别决定采取的agent方法
+# 根据意图识别决定采取的agent方法
 def route_query(
         state: AgentState,
 ) -> Literal[
@@ -156,14 +155,14 @@ def route_query(
     _type = router.type or "kb-query"
 
     # 检查配置中是否有图片或文件路径，如果有，优先对应处理
-    if hasattr(state, "config") and state.config:
-        cfg = state.config.get("configurable", {})
-        if cfg.get("image_path"):
-            logger.info("检测到图片路径，转为图片查询处理")
-            return "create_image_query"
-        if cfg.get("file_path"):
-            logger.info("检测到文件路径，转为文件上传处理")
-            return "create_file_query"
+    # if hasattr(state, "config") and state.config:
+    #     cfg = state.config.get("configurable", {})
+    #     if cfg.get("image_path"):
+    #         logger.info("检测到图片路径，转为图片查询处理")
+    #         return "create_image_query"
+    #     if cfg.get("file_path"):
+    #         logger.info("检测到文件路径，转为文件上传处理")
+    #         return "create_file_query"
 
     if _type == "general-query":
         return "respond_to_general_query"
@@ -171,17 +170,17 @@ def route_query(
         return "get_additional_info"
     elif _type in ("lightrag-query", "text2sql-query"):  # 图查询或结构化问数
         return "create_research_plan"
-    elif _type == "image-query":
-        return "create_image_query"
-    elif _type == "file-query":
-        return "create_file_query"
+    # elif _type == "image-query":
+    #     return "create_image_query"
+    # elif _type == "file-query":
+    #     return "create_file_query"
     elif _type=="kb-query":
         return "create_kb_query"
     else:
         raise ValueError(f"Unknown router type {_type}")
 
 
-#将回复转化成router
+# 将任意 router 结构转化成 Router对象
 def _ensure_router(router_obj: Any, *, fallback_question: str = "") -> Router:
     """将任意 router 结构转换为 Router 模型，保持字段访问兼容。"""
     if isinstance(router_obj, Router):
@@ -349,23 +348,25 @@ async def respond_to_general_query(
 
 
 
-
+checkpointer = MemorySaver()
 
 # 定义状态图
 builder = StateGraph(AgentState, input=InputState)
 # 添加节点
 builder.add_node(analyze_and_route_query) # 意图识别
-builder.add_node(respond_to_general_query)#默认回复
-# builder.add_node(get_additional_info) # 图结构信息
-# builder.add_node("create_research_plan", create_research_plan)  # 这里是lightrag neo4j-query
+
+builder.add_node(respond_to_general_query)# 默认回复
+builder.add_node(get_additional_info) # 额外信息
+builder.add_node(create_research_plan)  # 这里是lightrag neo4j-query
+builder.add_node(create_kb_query)
 # builder.add_node(create_image_query)
 # builder.add_node(create_file_query)
-# builder.add_node(create_kb_query)
 
 # 添加边
-builder.add_edge(START, "analyze_and_route_query")
-builder.add_conditional_edges("analyze_and_route_query", route_query)
+builder.add_edge(START, analyze_and_route_query)
+builder.add_conditional_edges(analyze_and_route_query, route_query)
 
+graph = builder.compile(checkpointer=checkpointer)
 
 
 
