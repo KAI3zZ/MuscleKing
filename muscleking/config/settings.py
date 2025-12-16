@@ -71,5 +71,17 @@ class Settings(BaseSettings):
         if isinstance(self.CORS_ORIGINS, str):
             return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
         return list(self.CORS_ORIGINS)
+    
+    # Knowledge base retrieval
+    KB_TOP_K: int = 5
+    KB_SIMILARITY_THRESHOLD: float = 0.2
+    KB_CHUNK_SIZE: int = Field(
+        default=512,
+        description="Chunk size used when splitting documents for the knowledge base",
+    )
+    KB_CHUNK_OVERLAP: int = Field(
+        default=80,
+        description="Chunk overlap used when splitting documents",
+    )
 
 settings = Settings()
