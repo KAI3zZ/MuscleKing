@@ -16,7 +16,7 @@ import torch
 from .vector_store import VectorStore
 from .reranker import Reranker
 
-# 注意，原本的recipe_id对应现在的base_id，代表文档的唯一ID
+# 注意，原本的recipe_id对应现在的exercise_id，代表文档的唯一ID
 class KnowledgeBaseService:
     """知识库服务类"""
 
@@ -79,7 +79,8 @@ class KnowledgeBaseService:
         content: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        """添加单个文档到知识库中
+        """
+        添加单个文档到知识库中(适用于文本类型的文档数据, 如Markdown、Word、txt等)
         Args:
             doc_id: 文档唯一ID
             title: 文档标题
@@ -91,29 +92,60 @@ class KnowledgeBaseService:
         meta = metadata.copy() if metadata else {}
         meta.setdefault("title", title)
         meta.setdefault("name", title)
-        meta.setdefault("base_id", doc_id if doc_id else uuid4().hex)
+        meta.setdefault("exercise_id", doc_id if doc_id else uuid4().hex)
         result = await self.ingest_text(content, metadata=meta)
         return result.get("add_count", 0) > 0
 
+    async def add_exercise(self, exercise_id: str, exercise_data: Dict[str, Any]) -> bool:
+        """
+        添加单个锻炼动作到知识库中(适用于json格式的锻炼动作数据)
+        Args:
+            exercise_id: 锻炼动作唯一ID
+            exercise_data: 锻炼动作数据(json格式)
+        Returns:
+            是否添加成功
+        """
+        content = self._format_exercise_content(exercise_data)
+        metadata = {
+            "exercise_id": exercise_id,
+            "name": exercise_data.get("name", ""),
+            "equipments": exercise_data.get("equipments", ""),
+            "body_parts": exercise_data.get("bodyParts", ""),
+        }
+        result = await self.ingest_text(content, metadata=metadata)
+        return result.get("add_count", 0) > 0
+    
+    async def add_exercises_batch(self, exercises: List[Dict[str, Any]]) -> Dict[str, int]:
+        """批量添加锻炼动作到知识库中(适用于json格式的锻炼动作数据)"""
+        success_count = 0
+        error_count = 0
+        for exercise in exercises:
+            exercise_id = exercise.get("exerciseId") or exercise.get("id") or str(uuid4())
+            if await self.add_exercise(exercise_id, exercise):
+                success_count += 1
+            else:
+                error_count += 1
+        return {"success": success_count, "error": error_count, "total": len(exercises)}
+
     async def ingest_text(
         self,
-        text: str,
+        content: str,
         *,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """将文本内容分块并存储到知识库中
         Args:
-            text: 原始文本内容
+            content: 原始文本内容
             metadata: 该文本的元数据
         Returns:
             一个包含 添加数量、分块ID列表 的字典
         """
 
-        if not text or not text.strip():
+        if not content or not content.strip():
             return {"add_count": 0, "ids": []}
 
         # 对文本进行分块(List[Document])
-        documents = await asyncio.to_thread(self._split_into_documents, text, metadata or {})
+        documents = await asyncio.to_thread(self._split_into_documents, content, metadata or {})
         if not documents:
             return {"add_count": 0, "ids": []}
 
@@ -125,27 +157,6 @@ class KnowledgeBaseService:
         result = await asyncio.to_thread(self._store_documents, documents, embeddings)
         return result
 
-    # async def add_recipe(self, recipe_id: str, recipe_data: Dict[str, Any]) -> bool:
-    #     document = self._format_recipe_document(recipe_data)
-    #     metadata = {
-    #         "recipe_id": recipe_id,
-    #         "name": recipe_data.get("name", ""),
-    #         "category": recipe_data.get("category", ""),
-    #         "difficulty": recipe_data.get("difficulty", ""),
-    #     }
-    #     result = await self.ingest_text(document, metadata=metadata)
-    #     return result.get("add_count", 0) > 0
-
-    # async def add_recipes_batch(self, recipes: List[Dict[str, Any]]) -> Dict[str, int]:
-    #     success_count = 0
-    #     error_count = 0
-    #     for recipe in recipes:
-    #         recipe_id = recipe.get("id") or recipe.get("recipe_id") or str(uuid4())
-    #         if await self.add_recipe(recipe_id, recipe):
-    #             success_count += 1
-    #         else:
-    #             error_count += 1
-    #     return {"success": success_count, "error": error_count, "total": len(recipes)}
 
     async def search(
         self,
@@ -156,27 +167,38 @@ class KnowledgeBaseService:
         filter_expr: Optional[str] = None,
         filter_by_similarity: bool = True,
     ) -> List[Dict[str, Any]]:
+        """根据查询内容，从知识库中检索出最相关的文档
+        Args:
+            query: 查询内容
+            top_k: 检索返回的文档数量
+            similarity_threshold: 文档与查询内容的相似度阈值
+            filter_expr: 用于过滤文档的表达式, 如filter_expr = "category == '家常菜'"
+            filter_by_similarity: 是否根据相似度进行过滤
+        Returns:
+            一个包含文档元数据和相似度分数的列表
+        """
         if not query or not query.strip():
             return []
 
         top_k = top_k or settings.KB_TOP_K
         similarity_threshold = (
-            similarity_threshold if similarity_threshold is not None else settings.KB_SIMILARITY_THRESHOLD
+            similarity_threshold if similarity_threshold else settings.KB_SIMILARITY_THRESHOLD
         )
 
         # 如果启用 reranker，先召回更多候选文档
         recall_k = top_k
         if self.reranker.enabled:
             recall_k = settings.RERANK_MAX_CANDIDATES  # 召回更多文档用于重排
-
-        embedding = await asyncio.to_thread(self.embeddings.embed_query, query)
+        # 对用户查询进行向量嵌入
+        query_embedding = await asyncio.to_thread(self.embeddings.embed_query, query)
         results = await asyncio.to_thread(
             self.vector_store.search,
-            embedding,
-            recall_k,  # 使用更大的召回数量
-            filter_expr,
+            query_embedding,
+            recall_k,  # 最大召回数量, 如果后续要用reranker, recall_k需要大于top_k
+            filter_expr, # 用于过滤文档的表达式
         )
 
+        # 过滤出符合相似度阈值的文档
         candidates = results
         if filter_by_similarity and similarity_threshold is not None:
             candidates = [r for r in candidates if r.get("score", 0.0) >= similarity_threshold]
@@ -184,7 +206,6 @@ class KnowledgeBaseService:
         # 使用 reranker 精排
         if candidates and self.reranker.enabled:
             candidates = await self.reranker.rerank(query, candidates, top_k)
-
         if self.reranker.enabled:
             candidates = [
                 r
@@ -194,19 +215,23 @@ class KnowledgeBaseService:
         elif not filter_by_similarity and similarity_threshold is not None:
             candidates = [r for r in candidates if r.get("score", 0.0) >= similarity_threshold]
 
-        return candidates[:top_k]
+        return candidates[:top_k]   # 这里的top_k和精排前的top_k是一样的，后续看看要不要修改
 
-    async def delete_recipe(self, recipe_id: str) -> bool:
-        return await asyncio.to_thread(self.vector_store.delete_documents, [recipe_id])
+    async def delete_exercise(self, exercise_id: str) -> bool:
+        """删除知识库中的指定锻炼动作"""
+        return await asyncio.to_thread(self.vector_store.delete_documents, [exercise_id])
 
     async def get_stats(self) -> Dict[str, Any]:
+        """
+        获取向量库的统计信息
+        """
         def _stats() -> Dict[str, Any]:
             stats = self.vector_store.get_collection_stats()
             stats.update(
                 {
                     "chunk_size": self.chunk_size,
                     "chunk_overlap": self.chunk_overlap,
-                    "embedding_model": settings.EMBEDDING_MODEL,
+                    "embedding_model": settings.EMBEDDING_MODEL_NAME,
                 }
             )
             return stats
@@ -214,20 +239,22 @@ class KnowledgeBaseService:
         return await asyncio.to_thread(_stats)
 
     async def clear(self) -> bool:
+        """清空知识库, 删除所有数据"""
         return await asyncio.to_thread(self.vector_store.clear_collection)
 
     async def close(self) -> None:
+        """关闭数据库连接"""
         await asyncio.to_thread(self.vector_store.close)
 
-    def _split_into_documents(self, text: str, metadata: Dict[str, Any]) -> List[Document]:
+    def _split_into_documents(self, content: str, metadata: Dict[str, Any]) -> List[Document]:
         """将文本分块为多个chunk(每个都是一个Document对象)
         Args:
-            text: 原始文本内容
+            content: 原始文本内容
             metadata: 该文本的元数据
         Returns: 
             一个Document对象列表
         """
-        base_document = Document(page_content=text, metadata=metadata)
+        base_document = Document(page_content=content, metadata=metadata)
         # 每个分块都会继承原始文档的元数据，这保证了分块后的文档仍然可以追溯到原始文档的信息
         chunks = self.splitter.split_documents([base_document])
         return chunks or [base_document]
@@ -239,7 +266,7 @@ class KnowledgeBaseService:
     ) -> Dict[str, Any]:
         """将文档分块及其嵌入存储到向量数据库中
         Args:
-            documents: 文档分块列表
+            documents: 分块后的文档列表
             embeddings: 对应的嵌入向量列表
         Returns:
             一个包含 添加数量、分块ID列表 和 是否存储成功状态 的字典
@@ -254,10 +281,10 @@ class KnowledgeBaseService:
         for index, doc in enumerate(documents):
             metadata = dict(doc.metadata or {})
             # 得到父文档（分块之前）的ID
-            base_id = metadata.get("base_id") or metadata.get("id") or metadata.get("source") or uuid4().hex
+            exercise_id = metadata.get("exercise_id") or metadata.get("id") or metadata.get("source") or uuid4().hex
             # 当前分块的ID, 格式为: 父文档ID_分块索引
-            chunk_id = f"{base_id}_{index}"
-            metadata.setdefault("base_id", base_id)
+            chunk_id = f"{exercise_id}_{index}"
+            metadata.setdefault("exercise_id", exercise_id)
             metadata.setdefault("chunk_id", chunk_id)
             metadata.setdefault("name", metadata.get("name") or metadata.get("title") or "")
 
@@ -277,50 +304,59 @@ class KnowledgeBaseService:
 
         return {"add_count": len(ids) if success else 0, "ids": ids, "stored": success}
 
-    def _format_recipe_document(self, recipe: Dict[str, Any]) -> str:
+    def _normalize_str_list(value) -> List[str]:
+        """把字符串或字符串列表统一转换为字符串列表"""
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            return [value]
+        return []
+    
+    def _format_exercise_content(self, exercise_data: Dict[str, Any]) -> str:
+        """
+        格式化字典格式的动作内容为字符串(动作的长文本具体描述,即content)
+        Args:
+            exercise_data: 包含动作信息的字典
+        Returns:
+            格式化后的字符串
+        """
         parts: List[str] = []
-        name = recipe.get("name")
+
+        name = self._normalize_str_list(exercise_data.get("name"))
         if name:
-            parts.append(f"菜名：{name}")
+            parts.append(f"动作名称：{', '.join(name)}")
 
-        category = recipe.get("category")
-        if category:
-            parts.append(f"分类：{category}")
+        equipments = self._normalize_str_list(exercise_data.get("equipments"))
+        if equipments:
+            parts.append(f"动作器械：{', '.join(equipments)}")
+        
+        bodyParts = self._normalize_str_list(exercise_data.get("bodyParts"))
+        if bodyParts:
+            parts.append(f"主要锻炼部位：{', '.join(bodyParts)}")
 
-        difficulty = recipe.get("difficulty")
-        if difficulty:
-            parts.append(f"难度：{difficulty}")
+        targetMuscles = self._normalize_str_list(exercise_data.get("targetMuscles"))
+        if targetMuscles:
+            parts.append(f"目标肌肉：{', '.join(targetMuscles)}")
+        
+        secondaryMuscles = self._normalize_str_list(exercise_data.get("secondaryMuscles"))
+        if secondaryMuscles:
+            parts.append(f"辅助肌肉：{', '.join(secondaryMuscles)}")
+        
+        exerciseType = self._normalize_str_list(exercise_data.get("exerciseType"))
+        if exerciseType:
+            parts.append(f"动作类型：{', '.join(exerciseType)}")
+        
+        gender = self._normalize_str_list(exercise_data.get("gender"))
+        if gender:
+            parts.append(f"适用性别：{', '.join(gender)}")
 
-        time_cost = recipe.get("time") or recipe.get("cook_time")
-        if time_cost:
-            parts.append(f"耗时：{time_cost}")
+        overview = self._normalize_str_list(exercise_data.get("overview"))
+        if overview:
+            parts.append(f"动作概述：{', '.join(overview)}")
 
-        ingredients = recipe.get("ingredients") or recipe.get("ingredient_list")
-        if ingredients:
-            if isinstance(ingredients, list):
-                formatted = "、".join(str(item) for item in ingredients)
-            else:
-                formatted = str(ingredients)
-            parts.append(f"食材：{formatted}")
-
-        steps = recipe.get("steps")
-        if steps:
-            if isinstance(steps, list):
-                step_lines = [f"步骤{idx + 1}：{step}" for idx, step in enumerate(steps)]
-                parts.extend(step_lines)
-            else:
-                parts.append(f"步骤：{steps}")
-
-        tips = recipe.get("tips")
-        if tips:
-            parts.append(f"小贴士：{tips}")
-
-        nutrition = recipe.get("nutrition")
-        if nutrition:
-            if isinstance(nutrition, dict):
-                nutritions = [f"{k}: {v}" for k, v in nutrition.items()]
-                parts.append("营养：" + "、".join(nutritions))
-            else:
-                parts.append(f"营养：{nutrition}")
+        instructions = self._normalize_str_list(exercise_data.get("instructions"))
+        if instructions:
+            parts.append(f"动作指导：{', '.join(instructions)}")
 
         return "\n".join(parts)
+

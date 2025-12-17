@@ -96,4 +96,21 @@ class Settings(BaseSettings):
     EMBEDDING_BASE_URL: Optional[str] = None
     EMBEDDING_DIMENSION: Optional[int] = Field(default=1024, description="Embedding dimension")
 
+    # Reranker configuration
+    RERANK_ENABLED: bool = Field(default=True, description="Enable reranking")
+    RERANK_PROVIDER: str = Field(default="custom", description="Rerank provider: cohere, jina, voyage, custom")
+    RERANK_BASE_URL: Optional[str] = Field(default=None, description="Rerank API base URL")
+    RERANK_ENDPOINT: str = Field(default="/rerank", description="Rerank endpoint path")
+    RERANK_MODEL: str = Field(default="bge-reranker-large", description="Rerank model name")
+    RERANK_API_KEY: Optional[str] = None
+    RERANK_MAX_CANDIDATES: int = Field(default=20, description="Max candidates for reranking")
+    RERANK_TOP_N: int = Field(default=6, description="Top N results after reranking")
+    RERANK_TIMEOUT: int = Field(default=30, description="Rerank API timeout in seconds")
+    RERANK_SCORE_FUSION_ALPHA: Optional[float] = Field(default=None, description="Score fusion alpha parameter")
+
+    KB_RERANK_SCORE_THRESHOLD: float = Field(
+        default=0.8,
+        description="Minimum rerank score required for vector results (e.g., Milvus)",
+    )
+
 settings = Settings()
