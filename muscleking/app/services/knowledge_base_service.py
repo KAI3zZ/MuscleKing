@@ -14,7 +14,7 @@ from muscleking.config import settings
 from .embeddings import OpenAICompatibleEmbeddings
 import torch
 from .vector_store import VectorStore
-from .reranker import Reranker
+from sentence_transformers import CrossEncoder
 
 # 注意，原本的recipe_id对应现在的exercise_id，代表文档的唯一ID
 class KnowledgeBaseService:
@@ -63,7 +63,12 @@ class KnowledgeBaseService:
         )
         
         # 载入重排序模型
-        self.reranker = Reranker()
+        self.reranker = CrossEncoder(
+            settings.RERANK_MODEL,
+            device=device,
+        )
+
+        self.enable_rerank = settings.ENABLE_RERANK if settings.ENABLE_RERANK else False
 
         logger.info(
             "KnowledgeBaseService 初始化完成 (chunk_size=%s, chunk_overlap=%s)",
@@ -156,7 +161,38 @@ class KnowledgeBaseService:
 
         result = await asyncio.to_thread(self._store_documents, documents, embeddings)
         return result
+    
+    async def _rerank_candidates(
+        self,
+        query: str,
+        candidates: List[Dict[str, Any]],
+        *,
+        top_k: Optional[int] = None,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
+        """对文档列表进行重排序
+        Args:
+            query: 查询内容
+            candidates: 待排序的文档列表
+            top_k: 排序返回的文档数量
+        Returns:
+            一个包含文档元数据和重排序分数的列表
+        """
+        if not candidates:
+            return []
 
+        top_k = top_k or len(candidates)
+        
+        scores = await asyncio.to_thread(
+            self.reranker.predict,
+            [(query, candidate["content"]) for candidate in candidates],
+        )
+
+        for candidate, score in zip(candidates, scores):
+            candidate["rerank_score"] = score
+
+        candidates.sort(key=lambda x: x["rerank_score"], reverse=True)
+        return candidates[:top_k]
 
     async def search(
         self,
@@ -187,7 +223,7 @@ class KnowledgeBaseService:
 
         # 如果启用 reranker，先召回更多候选文档
         recall_k = top_k
-        if self.reranker.enabled:
+        if self.enable_rerank:
             recall_k = settings.RERANK_MAX_CANDIDATES  # 召回更多文档用于重排
         # 对用户查询进行向量嵌入
         query_embedding = await asyncio.to_thread(self.embeddings.embed_query, query)
@@ -204,9 +240,9 @@ class KnowledgeBaseService:
             candidates = [r for r in candidates if r.get("score", 0.0) >= similarity_threshold]
 
         # 使用 reranker 精排
-        if candidates and self.reranker.enabled:
-            candidates = await self.reranker.rerank(query, candidates, top_k)
-        if self.reranker.enabled:
+        if candidates and self.enable_rerank:
+            candidates = await self._rerank_candidates(query, candidates, top_k=top_k)
+        if self.enable_rerank:
             candidates = [
                 r
                 for r in candidates

@@ -97,11 +97,12 @@ class Settings(BaseSettings):
     EMBEDDING_DIMENSION: Optional[int] = Field(default=1024, description="Embedding dimension")
 
     # Reranker configuration
+    ENABLE_RERANK: bool = Field(default=True, description="Enable reranking")
     RERANK_ENABLED: bool = Field(default=True, description="Enable reranking")
     RERANK_PROVIDER: str = Field(default="custom", description="Rerank provider: cohere, jina, voyage, custom")
     RERANK_BASE_URL: Optional[str] = Field(default=None, description="Rerank API base URL")
     RERANK_ENDPOINT: str = Field(default="/rerank", description="Rerank endpoint path")
-    RERANK_MODEL: str = Field(default="bge-reranker-large", description="Rerank model name")
+    RERANK_MODEL: str = Field(default="BAAI/bge-reranker-v2-m3", description="Rerank model name")
     RERANK_API_KEY: Optional[str] = None
     RERANK_MAX_CANDIDATES: int = Field(default=20, description="Max candidates for reranking")
     RERANK_TOP_N: int = Field(default=6, description="Top N results after reranking")
