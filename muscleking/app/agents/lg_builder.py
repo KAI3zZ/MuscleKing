@@ -5,9 +5,9 @@ from langchain_core.messages import BaseMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from loguru import logger
-from muscleking.app.models.model_lg_state import AdditionalGuardrailsOutput
+from muscleking.app.agents.models.model_lg_state import AdditionalGuardrailsOutput
 from dataclasses import dataclass, field
-from muscleking.app.models.model_lg_state import AgentState, InputState, Router, GradeHallucinations
+from muscleking.app.agents.models.model_lg_state import AgentState, InputState, Router, GradeHallucinations
 from muscleking.app.agents.lg_prompts import (ROUTER_SYSTEM_PROMPT,GENERAL_QUERY_SYSTEM_PROMPT,GUARDRAILS_SYSTEM_PROMPT,GET_ADDITIONAL_SYSTEM_PROMPT)
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
@@ -18,6 +18,10 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AIMessage
 from muscleking.app.persistence.core.neo4jconn import get_neo4j_graph
 from muscleking.app.utils.utils import retrieve_and_parse_schema_from_graph_for_prompts
+from muscleking.app.agents.retrieve.fitness_retriever import \
+    FitnessCypherRetriever
+from pydantic import BaseModel, Field
+
 
 logger = logger.bind(service="lg_builder")
 
@@ -198,17 +202,6 @@ def _ensure_router(router_obj: Any, *, fallback_question: str = "") -> Router:
             pass
     return Router(type="kb-query", logic="missing router", question=fallback_question)
 
-# 从 Config 中提取 configurable 字段
-def _extract_configurable(config: Any) -> Dict[str, Any]:
-    """提取 LangGraph RunnableConfig 中的 configurable 字段，确保返回字典。"""
-    if not config:
-        return {}
-    if isinstance(config, dict):
-        value = config.get("configurable", {})
-        return value if isinstance(value, dict) else {}
-    logger.warning("无法从 config 中提取 configurable 字段,返回空字典。请确保config和里面的configurable字段都必须是字典。")
-    return {}
-    
 
 #类型一：直接用大模型回答不含本地及其他外部知识
 async def respond_to_general_query(
@@ -343,7 +336,7 @@ async def get_additional_info(
     # 根据格式化输出的结果，返回不同的响应
     if guardrails_output.decision == "end":
         logger.info("-----Fail to pass guardrails check-----")
-        return {"messages": [AIMessage(content="厨友您好～抱歉哦，这个问题不太属于我们的菜谱范围呢，我主要帮您解答菜谱和烹饪方面的问题～😊")]}
+        return {"messages": [AIMessage(content="肌霸您好～抱歉哦，这个问题不太属于我们的范围呢，我主要帮您解答健身方面的问题～😊")]}
     else:
         logger.info("-----Pass guardrails check-----")
         router = _ensure_router(getattr(state, "router", None), fallback_question=state.messages[-1].content if state.messages else "")
@@ -356,98 +349,115 @@ async def get_additional_info(
         return {"messages": [response]}
 
 
-# 类型三：知识库问答
-async def create_kb_query(
+# 类型三： 图工具 查询节点
+async def create_research_plan(
         state: AgentState, *, config: RunnableConfig
-) -> Dict[str, List[BaseMessage]]:
-    """通过一个多工具子图进行知识库查询."""
-    logger.info("------execute KB multi-tool query------")
-    # 提取用户的query
-    last_message = state.messages[-1].content if state.messages else ""
-    if not last_message.strip():
-        return {"messages": [AIMessage(content="请告诉我具体的问题，我才能帮您查询知识库。")]}
-    # 提取config中的configurable字段
-    config_opts = _extract_configurable(config)
-    kb_top_k = config_opts.get("kb_top_k") or settings.KB_TOP_K
-    kb_similarity_threshold = (
-        config_opts.get("kb_similarity_threshold")
-        if config_opts.get("kb_similarity_threshold") is not None
-        else settings.KB_SIMILARITY_THRESHOLD
+) -> Dict[str, List[str] | str]:
+    """通过查询本地图知识库回答客户问题，执行任务分解，创建分布查询计划。
+
+    Args:
+        state (AgentState): 当前代理状态，包括对话历史。
+        config (RunnableConfig): 用于配置计划生成的模型。
+
+    Returns:
+        Dict[str, List[str] | str]: 包含'steps'键的字典，其中包含研究步骤列表。
+    """
+    logger.info("------execute local knowledge base query------")
+
+    # 使用大模型生成查询/多跳、并行查询计划
+    if not settings.OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY is not configured for research plan generation.")
+
+    model = ChatOpenAI(
+        openai_api_key=settings.OPENAI_API_KEY,
+        openai_api_base=settings.OPENAI_API_BASE,
+        model_name=settings.OPENAI_MODEL,
+        temperature=0.7,
+        tags=["research_plan"],
     )
-    kb_filter_expr = config_opts.get("kb_filter_expr")
 
-    knowledge_service: Optional[KnowledgeBaseService] = None
+    # 初始化必要参数
+    #  Neo4j图数据库连接 - 使用配置中的连接信息
+    neo4j_graph=None
     try:
-        if not settings.OPENAI_API_KEY:
-            raise RuntimeError("OPENAI_API_KEY is not configured for KB multi-tool workflow.")
+        neo4j_graph = get_neo4j_graph()
+        logger.info("success to get Neo4j graph database connection")
+    except Exception as e:
+        logger.error(f"failed to get Neo4j graph database connection: {e}")
 
-        llm = ChatOpenAI(
-            openai_api_key=settings.OPENAI_API_KEY,
-            model_name=settings.OPENAI_MODEL,
-            openai_api_base=settings.OPENAI_API_BASE,
-            temperature=0.3,
-            tags=["kb_multi_tool"],
-        )
+    #  创建菜谱场景的检索器实例，根据 Graph Schema创建 Cypher ， 优先生成对应问题的cypher模版 用来引导大模型生成正确的Cypher查询语句
+    cypher_retriever = FitnessCypherRetriever()
 
-        knowledge_service = KnowledgeBaseService()
+    #  定义工具模式列表
+    from muscleking.app.agents.models.tools_list import (
+        cypher_query,
+        predefined_cypher,
+        microsoft_graphrag_query,
+        text2sql_query,
+    )
+    tool_schemas: List[type[BaseModel]] = [
+        cypher_query,
+        predefined_cypher,
+        microsoft_graphrag_query,
+        text2sql_query,
+    ]
 
-        external_url = settings.KB_EXTERNAL_SEARCH_URL
-        if not external_url and settings.INGEST_SERVICE_URL:
-            external_url = f"{settings.INGEST_SERVICE_URL.rstrip('/')}/api/search"
+    #  预定义的Cypher查询 为菜谱场景定义有用的查询
+    from muscleking.app.agents.cyper_tools.cypher_dict import \
+        predefined_cypher_dict
 
-        workflow = create_kb_multi_tool_workflow(
-            llm=llm,
-            knowledge_service=knowledge_service,
-            top_k=kb_top_k,
-            similarity_threshold=kb_similarity_threshold,
-            filter_expr=kb_filter_expr,
-            allow_external=settings.KB_ENABLE_EXTERNAL_SEARCH,
-            external_search_url=external_url,
-        )
+    # 定义菜谱助手服务范围
+    scope_description = """
+    菜谱智能助手服务范围：为您提供全方位的烹饪指导和美食知识，包括但不限于：
 
-        history_payload = [
-            {
-                "role": getattr(msg, "type", "user"),
-                "content": getattr(msg, "content", ""),
-            }
-            for msg in state.messages[:-1]
-            if getattr(msg, "content", "").strip()
-        ]
+    🍳 菜谱查询与制作指导
+    - 各类中华料理的详细做法和烹饪技巧
+    - 食材用量、烹饪时长、火候掌握
+    - 分步骤的烹饪指导和小贴士
 
-        response = await workflow.ainvoke(
-            {
-                "question": last_message,
-                "history": history_payload,
-            }
-        )
-        answer_text = response.get("answer") or "检索完成，但暂时没有可以分享的结果。"
-        sources = response.get("sources", [])
+    🥬 食材知识与营养价值
+    - 食材的营养成分和健康功效
+    - 食材的选购、储存和处理方法
+    - 食材之间的搭配和替代建议
 
-        # 创建包含sources的AIMessage
-        ai_message = AIMessage(content=answer_text)
-        # 将sources附加到消息的additional_kwargs中
-        ai_message.additional_kwargs["sources"] = sources
+    🌶️ 口味与烹饪技法
+    - 各种口味特点（麻辣、酱香、清淡等）
+    - 不同烹饪方法（炒、蒸、煮、炖、烤等）
+    - 菜品分类（热菜、凉菜、汤品、主食等）
 
-        return {"messages": [ai_message], "sources": sources}
-    except Exception as exc:
-        logger.warning("KB multi-tool workflow unavailable (%s); falling back to direct search.", exc)
+    💊 食疗养生建议
+    - 食材的中医食疗功效
+    - 季节性饮食调理建议
+    - 特定人群的饮食注意事项
 
-    # Fallback: direct KB query
-    if knowledge_service is None:
-        knowledge_service = KnowledgeBaseService()
-    knowledge_node = create_knowledge_query_node(knowledge_service=knowledge_service)
-    input_state: KnowledgeQueryInputState = {
-        "task": last_message,
-        "context": {
-            "top_k": kb_top_k,
-            "similarity_threshold": kb_similarity_threshold,
-            "filter_expr": kb_filter_expr,
-        },
-        "steps": ["kb_query"],
+    暂不支持：政治、娱乐八卦、新闻时事、天气预报、网购推荐、医疗诊断等非健身相关内容。
+    """
+
+    # 创建多工具工作流
+    multi_tool_workflow = create_multi_tool_workflow(
+        llm=model,
+        graph=neo4j_graph,
+        tool_schemas=tool_schemas,
+        predefined_cypher_dict=predefined_cypher_dict,
+        cypher_example_retriever=cypher_retriever,
+        scope_description=scope_description,
+        llm_cypher_validation=True,
+    )
+
+    # return multi_tool_workflow
+    # 准备输入状态
+    last_message = state.messages[-1].content if state.messages else ""
+    input_state = {
+        "question": last_message,
+        "data": [],
+        "history": [],
+        "route_type": _ensure_router(getattr(state, "router", None)).type,
     }
-    result = await knowledge_node(input_state)
-    answer_text = result.get("answer", "") or "抱歉，我暂时无法从知识库中找到答案。"
-    return {"messages": [AIMessage(content=answer_text)]}
+
+    # 执行工作流
+    response = await multi_tool_workflow.ainvoke(input_state)
+    return {"messages": [AIMessage(content=response["answer"])]}
+
 
 
 
