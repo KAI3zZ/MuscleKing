@@ -15,7 +15,7 @@ def create_guardrails_node(
     llm: BaseChatModel,
     graph: Optional[Neo4jGraph] = None,
     scope_description: Optional[str] = None,
-) -> Callable[[InputState], Coroutine[Any, Any, dict[str, Any]]]:
+) -> Callable[[InputState], Coroutine[Any, Any, Dict[str, Any]]]:
     """
     Create a guardrails node for a Fitness Agent LangGraph workflow.
     """

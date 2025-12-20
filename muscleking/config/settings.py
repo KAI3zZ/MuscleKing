@@ -27,13 +27,11 @@ class Settings(BaseSettings):
     # LLM configuration
     LLM_PROVIDER: str = Field(default="openai", description="LLM provider")
     LLM_MODEL: str = Field(default="gpt-4o-mini", description="LLM model name")
-    LLM_API_KEY: Optional[str] = None
+    LLM_API_KEY: Optional[str] = Field(default=None, description="LLM_API_KEY")
     LLM_BASE_URL: Optional[str] = Field(default=None, description="LLM API base URL")
     
     # 兼容性配置 - 为了兼容lg_builder.py中的配置名称
-    OPENAI_API_KEY: Optional[str] = None
-    OPENAI_MODEL: str = Field(default="gpt-4o-mini", description="OpenAI model name")
-    OPENAI_API_BASE: Optional[str] = None
+    # 这些字段在__init__中动态设置
 
     # CORS配置 - 使用字符串，在代码中分割
     # 允许以下端口访问后端api
@@ -53,18 +51,17 @@ class Settings(BaseSettings):
         case_sensitive = False  # 大小写不敏感
         extra = "ignore"    # 忽略额外的环境变量
     
-    # OpenAI compatibility (使用 LLM 配置)
-    @property
-    def OPENAI_API_KEY(self) -> Optional[str]:
-        return self.LLM_API_KEY
-
-    @property
-    def OPENAI_API_BASE(self) -> Optional[str]:
-        return self.LLM_BASE_URL
-
-    @property
-    def OPENAI_MODEL(self) -> str:
-        return self.LLM_MODEL
+    # OpenAI compatibility fields
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_API_BASE: Optional[str] = None
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # 设置兼容性字段
+        self.OPENAI_API_KEY = self.LLM_API_KEY
+        self.OPENAI_API_BASE = self.LLM_BASE_URL
+        self.OPENAI_MODEL = self.LLM_MODEL
 
     def get_cors_origins(self) -> List[str]:
         """获取CORS允许的来源列表"""

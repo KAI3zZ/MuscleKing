@@ -1,10 +1,10 @@
-from typing import Any, Callable, Coroutine, Dict
+from typing import Any, Callable, Coroutine, Dict, List
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables.base import Runnable
 from loguru import logger
 from muscleking.app.agents.agent_state import InputState
 # 获取日志记录器
-logger = logger(service="planner_node")
+logger = logger.bind(service="planner_node")
 
 from muscleking.app.agents.agent_state import Task
 from muscleking.app.agents.planner.planner_prompt import create_planner_prompt_template
@@ -74,11 +74,21 @@ def create_planner_node(
 
 from pydantic import BaseModel, Field
 
-class PlannerOutput(BaseModel):
-    tasks: list[Task] = Field(
-        default_factory=list,
-        description="A list of tasks that must be complete to satisfy the input question.",
+class PlannerTask(BaseModel):
+    question: str = Field(..., description="Sub-question to be addressed")
+    parent_task: str = Field(..., description="Parent task")
+    requires_visualization: bool = Field(
+        default=False,
+        description="Whether visualization is needed"
     )
+
+
+class PlannerOutput(BaseModel):
+    tasks: List[PlannerTask] = Field(
+        default_factory=list,
+        description="Decomposed tasks"
+    )
+
 
 
 

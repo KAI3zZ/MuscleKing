@@ -20,6 +20,9 @@ from muscleking.app.persistence.core.neo4jconn import get_neo4j_graph
 from muscleking.app.utils.utils import retrieve_and_parse_schema_from_graph_for_prompts
 from muscleking.app.agents.retrieve.fitness_retriever import \
     FitnessCypherRetriever
+from muscleking.app.agents.multi_tools import (
+    create_multi_tool_workflow,
+) 
 from pydantic import BaseModel, Field
 
 

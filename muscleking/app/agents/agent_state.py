@@ -9,8 +9,8 @@ except ImportError:  # pragma: no cover - minimal stdlib fallback
 from langchain_core.messages import ToolCall
 from pydantic import BaseModel, Field
 
-from muscleking.app.models.text2cyper_state import CypherOutputState
-from muscleking.app.models.visual_state import VisualizationOutputState
+from muscleking.app.agents.cyper_tools.cypher_utils import CypherOutputState
+from muscleking.app.agents.models.visual_state import VisualizationOutputState
 
 
 class CypherHistoryRecord(TypedDict):
@@ -53,6 +53,29 @@ def update_history(
     history.extend(new)
     return history[-SIZE:]
 
+
+class Task(BaseModel):
+    question: str = Field(..., description="The question to be addressed.")
+    parent_task: str = Field(
+        ..., description="The parent task this task is derived from."
+    )
+    requires_visualization: bool = Field(
+        default=False,
+        description="Whether this task requires a visual to be returned.",
+    )
+    data: Optional[CypherOutputState] = Field(
+        default=None, description="The Cypher query result details."
+    )
+    visualization: Optional[VisualizationOutputState] = Field(
+        default=None, description="The visualization details."
+    )
+
+    @property
+    def is_complete(self) -> bool:
+        viz_bool = (self.requires_visualization and self.visualization is not None) or (
+            not self.requires_visualization and self.visualization is None
+        )
+        return viz_bool and self.data is not None
 
 class InputState(TypedDict, total=False):
     """The input state for multi agent workflows."""
@@ -127,27 +150,5 @@ class ToolSelectionErrorState(TypedDict):
 
 
 
-class Task(BaseModel):
-    question: str = Field(..., description="The question to be addressed.")
-    parent_task: str = Field(
-        ..., description="The parent task this task is derived from."
-    )
-    requires_visualization: bool = Field(
-        default=False,
-        description="Whether this task requires a visual to be returned.",
-    )
-    data: Optional[CypherOutputState] = Field(
-        default=None, description="The Cypher query result details."
-    )
-    visualization: Optional[VisualizationOutputState] = Field(
-        default=None, description="The visualization details."
-    )
-
-    @property
-    def is_complete(self) -> bool:
-        viz_bool = (self.requires_visualization and self.visualization is not None) or (
-            not self.requires_visualization and self.visualization is None
-        )
-        return viz_bool and self.data is not None
     
 
