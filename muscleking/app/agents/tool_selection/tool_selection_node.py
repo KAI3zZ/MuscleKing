@@ -24,7 +24,7 @@ from loguru import logger
 
 # Pre-build the prompt template so we can reuse it across calls.
 tool_selection_prompt = create_tool_selection_prompt_template()
-logger = logger(service="tool-selection")
+logger = logger.bind(service="tool-selection")
 
 SQL_KEYWORDS = [
     "sql",
