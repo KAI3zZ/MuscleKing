@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from muscleking.config import settings
 from loguru import logger
-from muscleking.app.models.kb_state import KBGuardrailsDecision, KBRouteDecision, KBInputState, KBWorkflowState, KBOutputState
+from muscleking.app.agents.models.kb_state import KBGuardrailsDecision, KBRouteDecision, KBInputState, KBWorkflowState, KBOutputState
 import aiohttp
 
 
