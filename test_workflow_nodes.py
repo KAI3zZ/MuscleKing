@@ -158,20 +158,21 @@ async def test_individual_nodes():
                 print(f"   详细错误: {traceback.format_exc()}")
 
         # if next_action == "tool_selection":
-            print("测试Tool Selection节点...")            
+            print("测试Tool Selection节点...")
             try:
-                tool_selection_result = await tool_selection_node({"question": question})
-                print(f"   输出的内容是：{tool_selection_result}")
-                
-                # 正确访问 Command 对象的内容
-                target_node = tool_selection_result.goto.node
-                send_arg = tool_selection_result.goto.arg
-                
-                print(f"   转到目标节点: {target_node}")
-                print(f"   任务内容: {send_arg.get('task', '')}")
-                print(f"   查询名称: {send_arg.get('query_name', '')}")
-                print(f"   查询参数: {send_arg.get('query_parameters', '')}")
-                print(f"   执行步骤: {send_arg.get('steps', '')}")
+                for j, task in enumerate(tasks, 1):
+                    tool_selection_result = await tool_selection_node({"question": getattr(task, 'question', str(task))}) 
+                    print(f"   输出的内容是：{tool_selection_result}")
+                    
+                    # 正确访问 Command 对象的内容
+                    target_node = tool_selection_result.goto.node
+                    send_arg = tool_selection_result.goto.arg
+                    
+                    print(f"   转到目标节点: {target_node}")
+                    print(f"   任务内容: {send_arg.get('task', '')}")
+                    print(f"   查询名称: {send_arg.get('query_name', '')}")
+                    print(f"   查询参数: {send_arg.get('query_parameters', '')}")
+                    print(f"   执行步骤: {send_arg.get('steps', '')}")
                 
             except Exception as e:
                 print(f"   Tool Selection测试失败: {e}")
