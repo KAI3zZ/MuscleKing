@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Data & Logs
+data/
+logs/
+*.log
+
+# LightRAG working directory
+lightrag_data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test & Coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+pytest_cache/
+.pytest_cache/
+
+# MyPy / Linting
+.mypy_cache/
+.mypy/
+.dmypy.json
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Models (local)
+models/
+*.pt
+*.bin
+*.onnx
+
+# Roo
+.roo/
